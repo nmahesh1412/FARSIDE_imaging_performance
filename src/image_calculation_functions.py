@@ -11,6 +11,9 @@ from astropy.time import Time
 from matplotlib.colors import LogNorm
 
 def lmtotp(L,M):
+    """
+    converts from L and M meshgrid to corresponding theta and phi meshgrid
+    """
     q = L**2+M**2
     el = np.sqrt(1 - q)
     if q>=1:
@@ -22,6 +25,9 @@ def lmtotp(L,M):
 
 
 def beamtopol(beam_pol):
+    """
+    Calculate Stokes I, Q, U and V images given XX, YY, XY and YX images
+    """
     sky_pol = np.zeros_like(beam_pol,dtype=np.complex128)
     sky_pol[0] = (beam_pol[0] + beam_pol[3])/2
     sky_pol[1] = (beam_pol[0] - beam_pol[3])/2
@@ -32,6 +38,9 @@ def beamtopol(beam_pol):
 
 
 def beamtopol_real(beam_pol):
+    """
+    Calculate Stokes I, Q, U and V images from real components of XX, YY, XY and YX images
+    """
     sky_pol = np.zeros_like(beam_pol,dtype=np.complex128)
     sky_pol[0] = (np.real(beam_pol[0]) + np.real(beam_pol[3]))/2
     sky_pol[1] = (np.real(beam_pol[0]) - np.real(beam_pol[3]))/2
@@ -42,7 +51,9 @@ def beamtopol_real(beam_pol):
 
 
 def altaz_sources(coos,times):
-   
+    """
+    Transform the source coordinates from the absolute sky frame to the antenna frame.
+    """
       
     farside_loc = EarthLocation.from_geodetic(lat = 0.0, lon = 180.0)
     aa_frame = coord.AltAz(obstime=times, location=farside_loc)
@@ -53,6 +64,9 @@ def altaz_sources(coos,times):
 
 
 def uvcal(dec,H_o,wav,y_off,z_off):
+    """
+    calculate the u,v,w coverage given the baselines and source position
+    """
     x =0
     u = np.sin(H_o)*x+ np.cos(H_o) * y_off/wav
     v = -np.sin(dec)*np.cos(H_o)*x + np.cos(dec)*z_off/wav + np.sin(dec)*np.sin(H_o)*y_off/wav
@@ -61,7 +75,9 @@ def uvcal(dec,H_o,wav,y_off,z_off):
 
 
 def baseline_cal(dec,H_o,wav,far_array):
-    
+    """
+    Given antenna positions in the array, calculate the baselines and u,v,w coverage
+    """
     n_basefa = permutations(np.arange(np.shape(far_array)[0]),2)
     basefa = (list(n_basefa))
     for i in range(np.shape(far_array)[0]):
@@ -80,6 +96,9 @@ def baseline_cal(dec,H_o,wav,far_array):
 
 
 def beam_interpolate(beam,theta,phi,t,p):
+    """
+    interpolates the beam from theta and phi to a rectangular grid.
+    """
     interp_spline = RectBivariateSpline(theta,phi,np.real(beam[:91,:]))
     beam_new = interp_spline(t,p,grid=False)
     
@@ -92,6 +111,9 @@ def beam_interpolate(beam,theta,phi,t,p):
 
 
 def read_feko(file_name_prefix,freq_p,theta_p,phi_p):
+    """
+    Reads in a typical feko output file and creates a beam object.
+    """
     beam_square = np.zeros((freq_p,theta_p,phi_p))
     gain_theta90 = np.zeros((freq_p,theta_p,phi_p))
     gain_phi90 = np.zeros((freq_p,theta_p,phi_p))
@@ -166,7 +188,9 @@ def read_feko(file_name_prefix,freq_p,theta_p,phi_p):
 
 
 class processed_source:
-    
+    """
+    Creates a source object and processes it through the complete FARSIDE pipeline
+    """
     def init_skycoords(self,ra_coords,dec_coords,theta_p,phi_p,flux,t):
         
         self.map_objs = SkyCoord(ra=ra_coords*u.degree, dec=dec_coords*u.degree)
@@ -370,6 +394,10 @@ class processed_source:
                
         
 def offset_correction(J_in, image):
+    """
+    Corrects for the offset between the X and Y dipoles in the sky images.
+    """
+
     c_image = np.zeros_like(image,dtype = np.complex128)
     c_image_temp = np.zeros_like(J_in,dtype=np.complex128)
     

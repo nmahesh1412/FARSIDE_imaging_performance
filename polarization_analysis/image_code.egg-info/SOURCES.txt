@@ -1,0 +1,7 @@
+setup.py
+image_code/image_calculation_functions.py
+image_code.egg-info/PKG-INFO
+image_code.egg-info/SOURCES.txt
+image_code.egg-info/dependency_links.txt
+image_code.egg-info/not-zip-safe
+image_code.egg-info/top_level.txt

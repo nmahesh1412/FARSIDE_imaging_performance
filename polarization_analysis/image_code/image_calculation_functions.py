@@ -19,7 +19,7 @@ def lmtotp(L,M):
     if q>=1:
         el = 0
 
-    p = - np.arctan2(M,L)#-np.arctan2(M,L)#
+    p = -np.arctan2(M,L)#-np.arctan2(M,L)#
     t = np.pi/2 - np.arcsin(el)#-np.arcsin(L,(np.sin(p)))+np.pi/2
     return p,t
 
@@ -191,7 +191,7 @@ class processed_source:
     """
     Creates a source object and processes it through the complete FARSIDE pipeline
     """
-    def init_skycoords(self,ra_coords,dec_coords,theta_p,phi_p,flux,t):
+    def init_skycoords(self,ra_coords,dec_coords,flux,t):
         
         self.map_objs = SkyCoord(ra=ra_coords*u.degree, dec=dec_coords*u.degree)
         self.map_objs_altaz = altaz_sources(self.map_objs,t)
@@ -199,32 +199,24 @@ class processed_source:
         self.alt = 90 - self.map_objs_altaz[0]
         self.az = self.map_objs_altaz[1]
                 
-        self.sky_map_tp = np.zeros((len(ra_coords),theta_p, phi_p))
+        self.sky_map_tp = np.zeros((len(ra_coords),3))
         for i in range(len(ra_coords)):
-            self.sky_map_tp[i,int(self.alt[i]),int(self.az[i])] = flux[i]
-            self.sky_map_tp[i] = np.roll(self.sky_map_tp[i],180,axis=1)
+            self.sky_map_tp[i,0] = flux[i]
+            self.sky_map_tp[i,1] = self.alt[i]
+            if self.az[i]>180:
+                self.sky_map_tp[i,2] = self.az[i]-360
+            else:
+                self.sky_map_tp[i,2]= self.az[i]
+            
         
     def init_skycoord(self,coord,t):
         self.obj_a = SkyCoord(coord, unit= (u.hourangle, u.deg))
         self.obj_a_altaz = altaz_sources(self.obj_a,t)
                               
-    def init_skymap(self,theta_p,phi_p,flux):
-        
-        self.alt = 90 - self.obj_a_altaz[0]
-        self.az = self.obj_a_altaz[1]
-        
-        self.sky_map_tp = np.zeros((theta_p, phi_p))
-        self.sky_map_tp[int(self.alt),int(self.az)] = flux
-        self.sky_map_tp = np.roll(self.sky_map_tp,180,axis=1)
-    
+       
     def plot_skymap(self):
-        if len(np.shape(self.sky_map_tp)) == 3: 
-            sky_map_tp_one = np.sum(self.sky_map_tp,axis=0)
-        else:
-             sky_map_tp_one = self.sky_map_tp
-        plt.pcolormesh(sky_map_tp_one),#norm = LogNorm())
-        cbar = plt.colorbar()
-        cbar.set_label('Jy')
+        plt.plot(self.sky_map_tp[:,2], self.sky_map_tp[:,1],'*'),#norm = LogNorm())
+        plt.ylim([180,0])
         plt.ylabel('theta')
         plt.xlabel('phi')
 
@@ -247,35 +239,20 @@ class processed_source:
 
         self.del_phi = 2*np.pi* (del_u*L + del_v*M)
         
-    def tp_to_lm(self,theta,phi,l_grid,m_grid,t,p):
-        self.sky_map=np.zeros_like(t)
-        if len(np.shape(self.sky_map_tp)) == 3:     
-            for i in range(np.shape(self.sky_map_tp)[0]):
+    def tp_to_lm(self,theta_lim,l_grid,m_grid):
+        self.sky_map=np.zeros((len(l_grid),len(m_grid)))
+        for i in range(np.shape(self.sky_map_tp)[0]):
                 
-                x = np.where(self.sky_map_tp[i]!=0)
-                if x[0]<30:
-                    l =np.sin(theta[x[0]])*np.cos(phi[x[1]])
-                    m = -np.sin(theta[x[0]])*np.sin(phi[x[1]])
+            if self.sky_map_tp[i,1]<theta_lim:
+                l =np.sin(self.sky_map_tp[i,1]*np.pi/180)*np.cos(self.sky_map_tp[i,2]*np.pi/180)
+                m = -np.sin(self.sky_map_tp[i,1]*np.pi/180)*np.sin(self.sky_map_tp[i,2]*np.pi/180)
 
-                    l_p = np.where(l_grid>l)[0][0]
-                    m_p = np.where(m_grid>m)[0][0]
+                l_p = np.where(l_grid>l)[0][0]
+                m_p = np.where(m_grid>m)[0][0]
 
-                    self.sky_map[m_p,l_p] = self.sky_map_tp[i,x[0],x[1]]
+                self.sky_map[m_p,l_p] = self.sky_map_tp[i,0]
 
-                
-        else:
-                x = np.where(self.sky_map_tp!=0)
-                print(x[0])
-                if x[0]<len(theta):
-                    print('here')
-                    l =np.sin(theta[x[0]])*np.cos(phi[x[1]])
-                    m = -np.sin(theta[x[0]])*np.sin(phi[x[1]])
-                
-                    l_p = np.where(l_grid>l)[0][0]
-                    m_p = np.where(m_grid>m)[0][0]
-                   
-                    self.sky_map[m_p,l_p] = self.sky_map_tp[x[0],x[1]]
-
+     
                 
     def make_sky_coherence(self):
         self.sky_coherence = np.array([[self.sky_map, np.zeros_like(self.sky_map)],[np.zeros_like(self.sky_map), self.sky_map]])
@@ -369,8 +346,8 @@ class processed_source:
                 
             for j in range(2):
                 for i in range(2):
-                    self.image[i,j] = (fft.ifftshift(fft.ifft2(fft.ifftshift(vis[i,j]))))*(factor*2)**2
-                    self.image_off[i,j] = (fft.ifftshift(fft.ifft2(fft.ifftshift(vis_offc[i,j]))))*(factor*2)**2
+                    self.image[i,j] = (fft.ifftshift(fft.ifft2(fft.ifftshift(vis[i,j]))))*(factor)**2
+                    self.image_off[i,j] = (fft.ifftshift(fft.ifft2(fft.ifftshift(vis_offc[i,j]))))*(factor)**2
                    
                     if w_effect==True:
                         self.image[i,j] = np.roll(self.image[i,j],[-factor+self.roll_index[0][0], -factor+self.roll_index[1][0]],axis=[0,1])

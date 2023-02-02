@@ -5,6 +5,7 @@ from matplotlib.colors import LogNorm, SymLogNorm
 
 from astropy.coordinates import EarthLocation
 from astropy import coordinates as coord
+import scipy.fft as fft
 
 from image_code import image_calculation_functions as ic
 
@@ -35,8 +36,22 @@ sig_2 = np.array([[0,1],[1,0]])
 sig_3 = np.array([[0,1j],[-1j,0]])
 sig_1 = np.array([[1,0],[0,-1]])
 
+def uv_to_psf(u,v,factor):
+    bins = factor
+    r_b = bins/2
+    H, xedges, yedges = np.histogram2d((u.flatten()),(v.flatten()),bins=(bins,bins),normed = True, range=[[-r_b,r_b],[-r_b,r_b]])
+   
+    #X, Y = np.meshgrid(xedges, yedges)
+    theta_x = fft.fftshift(fft.fftfreq(bins,1/(np.pi)))*180/np.pi
+    theta_y = fft.fftshift(fft.fftfreq(bins,1/(np.pi)))*180/np.pi
+    t_x,t_y = np.meshgrid(theta_x,theta_y)
 
-def muller_cal(etheta_square,ephi_square,etheta_square90,ephi_square90,freq_index,del_u,del_v,offset=0,title='dipole'):
+    H1_ft = (fft.ifftshift(fft.ifft2(fft.ifftshift(H)))) #* (bins/2)**2
+    H1_ft = H1_ft/np.max(H1_ft)
+    
+    return t_x,t_y, H1_ft
+
+def muller_cal(etheta_square,ephi_square,etheta_square90,ephi_square90,del_u,del_v,offset=0):
     M00 = np.zeros_like(etheta_square,dtype='complex')
     M01 = np.zeros_like(etheta_square,dtype='complex')
     M02 = np.zeros_like(etheta_square,dtype='complex')
@@ -98,121 +113,386 @@ def muller_cal(etheta_square,ephi_square,etheta_square90,ephi_square90,freq_inde
 
     
             
+    return M00,M01,M02,M03,M10,M11,M12,M13,M20,M21,M22,M23,M30,M31,M32,M33
+
+def muller_cal_s(etheta_square,ephi_square,etheta_square90,ephi_square90,del_u,del_v,offset=0):
+    M = np.zeros((4,4, np.shape(etheta_square)[0], np.shape(etheta_square)[1]),dtype='complex')
     
-    n_M00 = np.max(np.real(M00[:,:]))
+    phi = np.linspace(0,360,361)*np.pi/180
+    theta = np.linspace(0,90,91)*np.pi/180
+    
+    
+    for i in range(len(theta)):
+        for j in range(len(phi)):
+
+
+            l = np.sin(theta[i])*np.cos(phi[j])
+            m = np.sin(theta[i]) * np.sin(phi[j])                             
+            del_phi = 2*np.pi* (del_u*l + del_v*m)
+            J_b = np.array([[1,0],[0,np.exp(1j*del_phi)]])
+
+            J = np.array([[etheta_square[i,j],ephi_square[i,j]],[etheta_square90[i,j],ephi_square90[i,j]]])
+            if offset==1:
+                J = np.dot(J_b,J)
+            if offset ==2:
+                J = J_b
+            
+            M[:,:,i,j] = 0.5 * np.dot(np.array([[1,0,0,1],[1,0,0,-1],[0,1,1,0],[0,-1j,1j,0]]) , np.kron(J,np.conj(J))).dot(np.array([[1,1,0,0],[0,0,1,1j],[0,0,1,-1j],[1,-1,0,0]]))
+          
+            
+    return M[0,0],M[0,1],M[0,2],M[0,3],M[1,0],M[1,1],M[1,2],M[1,3],M[2,0],M[2,1],M[2,2],M[2,3],M[3,0],M[3,1],M[3,2],M[3,3]
+
+def plot_muller_cal_real(M_matrix, title = 'dipole',save_fig=True):
+    phi = np.linspace(0,360,361)*np.pi/180
+    theta = np.linspace(0,90,91)*np.pi/180
+    
+    n_M00 = np.max(np.real(M_matrix[0]))
     lth=1e-4
     P,T = np.meshgrid(phi,theta)
   
-
-    fig,ax = plt.subplots(4,4, subplot_kw=dict(polar=True),figsize=(20,20))#,constrained_layout=True)
-    #fig.suptitle(title,fontsize=30)
-    #plt.title('Dipole_100m_regolith_0p1MHz')
-    p = ax[0,0].pcolormesh(P,T,np.real(M00[:90,:])/n_M00,cmap='coolwarm',vmax=1,vmin=0)#norm = SymLogNorm(linthresh=lth)#,  norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[0,0].set_title('M00',{'fontsize':15},pad=15.0)
+    plt.rc('font',size=7)
+    plt.rc('axes', labelsize=7)
+    
+    fig,ax = plt.subplots(4,4, subplot_kw=dict(polar=True),figsize=(7.5,5))
+    plt.subplots_adjust(hspace=0.2,wspace=0.35)
+    
+    p = ax[0,0].pcolormesh(P,T,np.real(M_matrix[0][:90,:])/n_M00,cmap='coolwarm',vmax=1,vmin=1e-2, norm = SymLogNorm(linthresh=lth), rasterized=True)#,  norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[0,0].set_title('M00',{'fontsize':8},pad=0.0)
     ax[0,0].set_yticklabels([])
-    plt.colorbar(p,ax=ax[0,0],pad=0.1,shrink=0.8)
+    ax[0,0].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[0,0].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[0,0],pad=0.1,shrink=0.8,ticks=[1e-2,1e-1,1],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['1e-2', '1e-1', ' 1']) 
 
-    p = ax[0,1].pcolormesh(P,T,np.real(M01[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=1e-4, ))#, norm = SymLogNorm(linthresh= lth,vmin = -0.01, vmax = 0.01))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[0,1].set_title('M01',{'fontsize':15},pad=15.0)
+    p = ax[0,1].pcolormesh(P,T,np.real(M_matrix[1][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth, ))#, norm = SymLogNorm(linthresh= lth,vmin = -0.01, vmax = 0.01))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[0,1].set_title('M01',{'fontsize':8},pad=0.0)
     ax[0,1].set_yticklabels([])
-    plt.colorbar(p,ax=ax[0,1],pad=0.1,shrink=0.8)
+    ax[0,1].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[0,1].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[0,1],pad=0.1,shrink=0.8, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
-    p= ax[0,2].pcolormesh(P,T,np.real(M02[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[0,2].set_title('M02',{'fontsize':15},pad=15.0)
+    p= ax[0,2].pcolormesh(P,T,np.real(M_matrix[2][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[0,2].set_title('M02',{'fontsize':8},pad=0.0)
     ax[0,2].set_yticklabels([])
-    plt.colorbar(p,ax=ax[0,2],pad=0.1,shrink=0.8)
+    ax[0,2].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[0,2].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[0,2],pad=0.1,shrink=0.8,ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
-    p = ax[0,3].pcolormesh(P,T,np.real(M03[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh= lth, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[0,3].set_title('M03',{'fontsize':15},pad=15.0)
+    p = ax[0,3].pcolormesh(P,T,np.real(M_matrix[3][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2, norm = SymLogNorm(linthresh= lth))#, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[0,3].set_title('M03',{'fontsize':8},pad=0.0)
     ax[0,3].set_yticklabels([])
-    plt.colorbar(p,ax=ax[0,3],pad=0.1,shrink=0.8)
+    ax[0,3].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[0,3].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[0,3],pad=0.1,shrink=0.8, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
     ##################################
-    p = ax[1,0].pcolormesh(P,T,np.real(M10[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh= lth, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[1,0].set_title('M10',{'fontsize':15},pad=15.0)
+    p = ax[1,0].pcolormesh(P,T,np.real(M_matrix[4][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2, norm = SymLogNorm(linthresh= lth))#, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[1,0].set_title('M10',{'fontsize':8},pad=0.0)
     ax[1,0].set_yticklabels([])
-    plt.colorbar(p,ax=ax[1,0],pad=0.1,shrink=0.8)
+    ax[1,0].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[1,0].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[1,0],pad=0.1,shrink=0.8,ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
-    p = ax[1,1].pcolormesh(P,T,np.real(M11[:90,:])/n_M00,cmap='coolwarm',vmin = -1, vmax =1)#norm = SymLogNorm(linthresh=lth, vmin = -1, vmax =1)) #X,Y & data2D must all be same dimensions
-    ax[1,1].set_title('M11',{'fontsize':15},pad=15.0)
+    p = ax[1,1].pcolormesh(P,T,np.real(M_matrix[5][:90,:])/n_M00,cmap='coolwarm',vmin = -1, vmax =1, norm = SymLogNorm(linthresh=1e-2, vmin = -1, vmax =1)) #X,Y & data2D must all be same dimensions
+    ax[1,1].set_title('M11',{'fontsize':8},pad=0.0)
     ax[1,1].set_yticklabels([])
-    plt.colorbar(p,ax=ax[1,1],pad=0.1,shrink=0.8)
+    ax[1,1].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[1,1].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[1,1],pad=0.1,shrink=0.8,ticks=[-1,-1e-2, 1e-2,1], format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1', '-1e-2', ' 1e-2',' 1']) 
 
-    p=ax[1,2].pcolormesh(P,T,np.real(M12[:90,:])/n_M00,cmap='coolwarm',vmin = -1, vmax =1)#norm = SymLogNorm(linthresh=lth, vmin = -1, vmax=1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[1,2].set_title('M12',{'fontsize':15},pad=15.0)
+    p=ax[1,2].pcolormesh(P,T,np.real(M_matrix[6][:90,:])/n_M00,cmap='coolwarm',vmin = -1, vmax =1, norm = SymLogNorm(linthresh=1e-2, vmin = -1, vmax=1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[1,2].set_title('M12',{'fontsize':8},pad=0.0)
     ax[1,2].set_yticklabels([])
-    plt.colorbar(p,ax=ax[1,2],pad=0.1,shrink=0.8)
+    ax[1,2].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[1,2].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[1,2],pad=0.1,shrink=0.8, ticks=[-1,-1e-2, 1e-2,1],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1', '-1e-2', ' 1e-2',' 1']) 
 
-    p = ax[1,3].pcolormesh(P,T,np.real(M13[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[1,3].set_title('M13',{'fontsize':15},pad=15.0)
+    p = ax[1,3].pcolormesh(P,T,np.real(M_matrix[7][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2, norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[1,3].set_title('M13',{'fontsize':8},pad=0.0)
     ax[1,3].set_yticklabels([])
-    plt.colorbar(p,ax=ax[1,3],pad=0.1,shrink=0.8)
+    ax[1,3].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[1,3].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[1,3],pad=0.1,shrink=0.8, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
     ##################################
-    p=ax[2,0].pcolormesh(P,T,np.real(M20[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[2,0].set_title('M20',{'fontsize':15},pad=15.0)
+    p=ax[2,0].pcolormesh(P,T,np.real(M_matrix[8][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[2,0].set_title('M20',{'fontsize':8},pad=0.0)
     ax[2,0].set_yticklabels([])
-    plt.colorbar(p,ax=ax[2,0],pad=0.1,shrink=0.8)
+    ax[2,0].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[2,0].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[2,0],pad=0.1,shrink=0.8, ticks=[-1e-2,-1e-4,1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
-    p = ax[2,1].pcolormesh(P,T,np.real(M21[:90,:])/n_M00,cmap='coolwarm',vmin = -1, vmax =1)#norm = SymLogNorm(linthresh=lth, vmin = -1, vmax=1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[2,1].set_title('M21',{'fontsize':15},pad=15.0)
+    p = ax[2,1].pcolormesh(P,T,np.real(M_matrix[9][:90,:])/n_M00,cmap='coolwarm',vmin = -1, vmax =1,norm = SymLogNorm(linthresh=1e-2, vmin = -1, vmax=1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[2,1].set_title('M21',{'fontsize':8},pad=0.0)
     ax[2,1].set_yticklabels([])
-    plt.colorbar(p,ax=ax[2,1],pad=0.1,shrink=0.8)
+    ax[2,1].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[2,1].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[2,1],pad=0.1,shrink=0.8, ticks=[-1,-1e-2, 1e-2,1],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1', '-1e-2', ' 1e-2',' 1']) 
 
-    p = ax[2,2].pcolormesh(P,T,np.real(M22[:90,:])/n_M00,cmap='coolwarm',vmin = -1, vmax =1)#norm = SymLogNorm(linthresh=lth, vmin = -1, vmax =1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[2,2].set_title('M22',{'fontsize':15},pad=15.0)
+    p = ax[2,2].pcolormesh(P,T,np.real(M_matrix[10][:90,:])/n_M00,cmap='coolwarm',vmin = -1, vmax =1,norm = SymLogNorm(linthresh=1e-2, vmin = -1, vmax =1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[2,2].set_title('M22',{'fontsize':8},pad=0.0)
     ax[2,2].set_yticklabels([])
-    plt.colorbar(p,ax=ax[2,2],pad=0.1,shrink=0.8)
+    ax[2,2].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[2,2].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[2,2],pad=0.1,shrink=0.8, ticks=[-1,-1e-2, 1e-2,1],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1', '-1e-2', ' 1e-2',' 1']) 
 
-    p = ax[2,3].pcolormesh(P,T,np.real(M23[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[2,3].set_title('M23',{'fontsize':15},pad=15.0)
+    p = ax[2,3].pcolormesh(P,T,np.real(M_matrix[11][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[2,3].set_title('M23',{'fontsize':8},pad=0.0)
     ax[2,3].set_yticklabels([])
-    plt.colorbar(p,ax=ax[2,3],pad=0.1,shrink=0.8)
+    ax[2,3].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[2,3].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[2,3],pad=0.1,shrink=0.8, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
     ##################################
-    p = ax[3,0].pcolormesh(P,T,np.real(M30[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)# norm=SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[3,0].set_title('M30',{'fontsize':15},pad=15.0)
+    p = ax[3,0].pcolormesh(P,T,np.real(M_matrix[12][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2, norm=SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[3,0].set_title('M30',{'fontsize':8},pad=0.0)
     ax[3,0].set_yticklabels([])
-    plt.colorbar(p,ax=ax[3,0],pad=0.1,shrink=0.8)
+    ax[3,0].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[3,0].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[3,0],pad=0.1,shrink=0.8, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
-    p = ax[3,1].pcolormesh(P,T,np.real(M31[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[3,1].set_title('M31',{'fontsize':15},pad=15.0)
+    p = ax[3,1].pcolormesh(P,T,np.real(M_matrix[13][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[3,1].set_title('M31',{'fontsize':8},pad=0.0)
     ax[3,1].set_yticklabels([])
-    plt.colorbar(p,ax=ax[3,1],pad=0.1,shrink=0.8)
+    ax[3,1].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[3,1].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[3,1],pad=0.1,shrink=0.8,ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
-    p = ax[3,2].pcolormesh(P,T,np.real(M32[:90,:])/n_M00,cmap='coolwarm',vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[3,2].set_title('M32',{'fontsize':15},pad=15.0)
+    p = ax[3,2].pcolormesh(P,T,np.real(M_matrix[14][:90,:])/n_M00,cmap='coolwarm',vmin = -1e-2, vmax =1e-2, norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[3,2].set_title('M32',{'fontsize':8},pad=0.0)
     ax[3,2].set_yticklabels([])
-    plt.colorbar(p,ax=ax[3,2],pad=0.1,shrink=0.8)
+    ax[3,2].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[3,2].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[3,2],pad=0.1,shrink=0.8,ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
 
-    p = ax[3,3].pcolormesh(P,T,np.real(M33[:90,:]/n_M00),cmap='coolwarm',vmin = 0, vmax =1)#norm = SymLogNorm(linthresh=lth, vmin = 0, vmax =1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-    ax[3,3].set_title('M33',{'fontsize':15},pad=15.0)
+    p = ax[3,3].pcolormesh(P,T,np.real(M_matrix[15][:90,:]/n_M00),cmap='coolwarm',vmin = -0.5, vmax =0.5, norm = SymLogNorm(linthresh=1e-2))#, vmin = 0, vmax =1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[3,3].set_title('M33',{'fontsize':8},pad=0.0)
     ax[3,3].set_yticklabels([])
-    plt.colorbar(p,ax=ax[3,3],pad=0.1,shrink=0.8)
+    ax[3,3].set_xticks(np.array([45,135,225,315])*np.pi/180)
+    ax[3,3].tick_params(axis='x',pad=-0.5)
+    cbar = plt.colorbar(p,ax=ax[3,3],pad=0.1,shrink=0.8,ticks=[1e-2,1e-1,1],format= '% 1.0e')
+    cbar.ax.set_yticklabels(['1e-2', '1e-1', '1']) 
+    
+    if save_fig==True:
+        plt.savefig('/data4/nmahesh/edges/Lunar/plots/'+title+'.pdf',dpi=300,bbox_inches = 'tight')
 
-    plt.savefig('/data4/nmahesh/edges/Lunar/plots/'+title+'.png',dpi=900,bbox_inches = 'tight')
+def plot_muller_cal_abs(M_matrix,title='dipole',save_fig=False):
+
+    phi = np.linspace(0,360,361)*np.pi/180
+    theta = np.linspace(0,90,91)*np.pi/180
+    
+               
+    
+    n_M00 = np.max(np.real(M_matrix[0]))
+    lth=1e-4
+    P,T = np.meshgrid(phi,theta)
+  
+    plt.rc('font',size=7)
+    plt.rc('axes', labelsize=7)
+    
+    fig,ax = plt.subplots(4,4, subplot_kw=dict(polar=True),figsize=(7.5,5))#,constrained_layout=True)
+    plt.subplots_adjust(hspace=0.2,wspace=0.35)
+    p = ax[0,0].pcolormesh(P,T,np.abs(M_matrix[0][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmax=1,vmin=1e-2, norm = SymLogNorm(linthresh=lth), rasterized=True)#,  norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[0,0].set_title('M00',{'fontsize':8},pad=0.0)
+    ax[0,0].set_yticklabels([])
+    ax[0,0].set_xticks([])
+    ax[0,0].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[0,0].tick_params(axis='x',pad=-0.5)
+    ax[0,0].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[0,0],pad=0.1,shrink=0.8)#,ticks=[1e-2,1e-1,1],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['1e-2', '1e-1', ' 1']) 
+
+    p = ax[0,1].pcolormesh(P,T,np.abs(M_matrix[1][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth, ))#, norm = SymLogNorm(linthresh= lth,vmin = -0.01, vmax = 0.01))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[0,1].set_title('M01',{'fontsize':8},pad=0.0)
+    ax[0,1].set_yticklabels([])
+    ax[0,1].set_xticks([])
+    ax[0,1].set_rgrids([np.pi/6,np.pi/3],[30,60])  
+    ax[0,1].tick_params(axis='x',pad=-0.5)
+    ax[0,1].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[0,1],pad=0.1,shrink=0.8)#, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    p= ax[0,2].pcolormesh(P,T,np.abs(M_matrix[2][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[0,2].set_title('M02',{'fontsize':8},pad=0.0)
+    ax[0,2].set_yticklabels([])
+    ax[0,2].set_xticks([])
+    ax[0,2].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[0,2].tick_params(axis='x',pad=-0.5)
+    ax[0,2].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[0,2],pad=0.1,shrink=0.8)#,ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    p = ax[0,3].pcolormesh(P,T,np.abs(M_matrix[3][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2, norm = SymLogNorm(linthresh= lth))#, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[0,3].set_title('M03',{'fontsize':8},pad=0.0)
+    ax[0,3].set_yticklabels([])
+    ax[0,3].set_xticks([])
+    ax[0,3].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[0,3].tick_params(axis='x',pad=-0.5)
+    ax[0,3].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[0,3],pad=0.1,shrink=0.8)#, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    ##################################
+    p = ax[1,0].pcolormesh(P,T,np.abs(M_matrix[4][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2, norm = SymLogNorm(linthresh= lth))#, vmin = -1e-3, vmax = 1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[1,0].set_title('M10',{'fontsize':8},pad=0.0)
+    ax[1,0].set_yticklabels([])
+    ax[1,0].set_xticks([])
+    ax[1,0].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[1,0].tick_params(axis='x',pad=-0.5)
+    ax[1,0].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[1,0],pad=0.1,shrink=0.8)#,ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    p = ax[1,1].pcolormesh(P,T,np.abs(M_matrix[5][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1, vmax =1, norm = SymLogNorm(linthresh=1e-2, vmin = -1, vmax =1)) #X,Y & data2D must all be same dimensions
+    ax[1,1].set_title('M11',{'fontsize':8},pad=0.0)
+    ax[1,1].set_yticklabels([])
+    ax[1,1].set_xticks([])
+    ax[1,1].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[1,1].tick_params(axis='x',pad=-0.5)
+    ax[1,1].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[1,1],pad=0.1,shrink=0.8)#,ticks=[-1,-1e-2, 1e-2,1], format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1', '-1e-2', ' 1e-2',' 1']) 
+
+    p=ax[1,2].pcolormesh(P,T,np.abs(M_matrix[6][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1, vmax =1, norm = SymLogNorm(linthresh=1e-2, vmin = -1, vmax=1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[1,2].set_title('M12',{'fontsize':8},pad=0.0)
+    ax[1,2].set_yticklabels([])
+    ax[1,2].set_xticks([])
+    ax[1,2].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[1,2].tick_params(axis='x',pad=-0.5)
+    ax[1,2].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[1,2],pad=0.1,shrink=0.8)#, ticks=[-1,-1e-2, 1e-2,1],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1', '-1e-2', ' 1e-2',' 1']) 
+
+    p = ax[1,3].pcolormesh(P,T,np.abs(M_matrix[7][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2, norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[1,3].set_title('M13',{'fontsize':8},pad=0.0)
+    ax[1,3].set_yticklabels([])
+    ax[1,3].set_xticks([])
+    ax[1,3].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[1,3].tick_params(axis='x',pad=-0.5)
+    ax[1,3].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[1,3],pad=0.1,shrink=0.8)#, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    ##################################
+    p=ax[2,0].pcolormesh(P,T,np.abs(M_matrix[8][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[2,0].set_title('M20',{'fontsize':8},pad=0.0)
+    ax[2,0].set_yticklabels([])
+    ax[2,0].set_xticks([])
+    ax[2,0].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[2,0].tick_params(axis='x',pad=-0.5)
+    ax[2,0].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[2,0],pad=0.1,shrink=0.8)#, ticks=[-1e-2,-1e-4,1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    p = ax[2,1].pcolormesh(P,T,np.abs(M_matrix[9][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1, vmax =1,norm = SymLogNorm(linthresh=1e-2, vmin = -1, vmax=1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[2,1].set_title('M21',{'fontsize':8},pad=0.0)
+    ax[2,1].set_yticklabels([])
+    ax[2,1].set_xticks([])
+    ax[2,1].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[2,1].tick_params(axis='x',pad=-0.5)
+    ax[2,1].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[2,1],pad=0.1,shrink=0.8)#, ticks=[-1,-1e-2, 1e-2,1],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1', '-1e-2', ' 1e-2',' 1']) 
+
+    p = ax[2,2].pcolormesh(P,T,np.abs(M_matrix[10][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1, vmax =1,norm = SymLogNorm(linthresh=1e-2, vmin = -1, vmax =1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[2,2].set_title('M22',{'fontsize':8},pad=0.0)
+    ax[2,2].set_yticklabels([])
+    ax[2,2].set_xticks([])
+    ax[2,2].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[2,2].tick_params(axis='x',pad=-0.5)
+    ax[2,2].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[2,2],pad=0.1,shrink=0.8)#, ticks=[-1,-1e-2, 1e-2,1],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1', '-1e-2', ' 1e-2',' 1']) 
+
+    p = ax[2,3].pcolormesh(P,T,np.abs(M_matrix[11][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[2,3].set_title('M23',{'fontsize':8},pad=0.0)
+    ax[2,3].set_yticklabels([])
+    ax[2,3].set_xticks([])
+    ax[2,3].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[2,3].tick_params(axis='x',pad=-0.5)
+    ax[2,3].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[2,3],pad=0.1,shrink=0.8)#, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    ##################################
+    p = ax[3,0].pcolormesh(P,T,np.abs(M_matrix[12][:90,:])/n_M00,cmap='coolwarm')#,vmin = -1e-2, vmax =1e-2, norm=SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[3,0].set_title('M30',{'fontsize':8},pad=0.0)
+    ax[3,0].set_yticklabels([])
+    ax[3,0].set_xticks([])
+    ax[3,0].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[3,0].tick_params(axis='x',pad=-0.5)
+    ax[3,0].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[3,0],pad=0.1,shrink=0.8)#, ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    p = ax[3,1].pcolormesh(P,T,np.abs(M_matrix[13][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2,norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[3,1].set_title('M31',{'fontsize':8},pad=0.0)
+    ax[3,1].set_yticklabels([])
+    ax[3,1].set_xticks([])
+    ax[3,1].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[3,1].tick_params(axis='x',pad=-0.5)
+    ax[3,1].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[3,1],pad=0.1,shrink=0.8)#,ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    p = ax[3,2].pcolormesh(P,T,np.abs(M_matrix[14][:90,:])/n_M00,cmap='coolwarm',rasterized=True)#,vmin = -1e-2, vmax =1e-2, norm = SymLogNorm(linthresh=lth))#, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[3,2].set_title('M32',{'fontsize':8},pad=0.0)
+    ax[3,2].set_yticklabels([])
+    ax[3,2].set_xticks([])
+    ax[3,2].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[3,2].tick_params(axis='x',pad=-0.5)
+    ax[3,2].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[3,2],pad=0.1,shrink=0.8)#,ticks=[-1e-2,-1e-4, 1e-4,1e-2],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['-1e-2', '-1e-4', ' 1e-4',' 1e-2']) 
+
+    p = ax[3,3].pcolormesh(P,T,np.abs(M_matrix[15][:90,:]/n_M00),cmap='coolwarm',rasterized=True)#,vmin = 1e-2, vmax =1, norm = SymLogNorm(linthresh=1e-6))#, vmin = 0, vmax =1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+    ax[3,3].set_title('M33',{'fontsize':8},pad=0.0)
+    ax[3,3].set_yticklabels([])
+    ax[3,3].set_xticks([])
+    ax[3,3].set_rgrids([np.pi/6,np.pi/3],[30,60])
+    ax[3,3].tick_params(axis='x',pad=-0.5)
+    ax[3,3].grid(linewidth=1,color='k')
+    cbar = plt.colorbar(p,ax=ax[3,3],pad=0.1,shrink=0.8)#,ticks=[1e-2,1e-1,1],format= '% 1.0e')
+    #cbar.ax.set_yticklabels(['1e-2', '1e-1', '1']) 
+    
+    if save_fig==True:
+        plt.savefig('/data4/nmahesh/edges/Lunar/plots/'+title+'.pdf',dpi=300,bbox_inches = 'tight')
 
 
 
 
-    return M00,M01,M02,M03,M10,M11,M12,M13,M20,M21,M22,M23,M30,M31,M32,M33
     
 
-    def offset_vmuller_cal(freq_index,de,H_o,off,title='dipole'):
-  
+def offset_vmuller_cal(de,H_o,off):
+    
     phi = np.linspace(0,360,361)*np.pi/180
     theta = np.linspace(0,90,91)*np.pi/180
     wav = np.array([500,150,30])
     freq = 300/wav
-    M30 = np.zeros((3,len(theta),len(phi)),dtype='complex')
-    M31 = np.zeros((3,len(theta),len(phi)),dtype='complex')
-    M32 = np.zeros((3,len(theta),len(phi)),dtype='complex')
-    M33 = np.zeros((3,len(theta),len(phi)),dtype='complex')
+    
     lth=1e-4
     
     P,T = np.meshgrid(phi,theta)
-    fig,ax = plt.subplots(3,4, subplot_kw=dict(polar=True),figsize=(20,20))#,constrained_layout=True)
    
+    plt.rc('font',size=7)
+    plt.rc('axes', labelsize=7)
     for k in range(3):   
+        fig,ax = plt.subplots(2,2, subplot_kw=dict(polar=True),figsize=(4,3.5))#,constrained_layout=True)
+        M = np.zeros((4,4,len(theta),len(phi)),dtype='complex')
         for i in range(len(theta)):
             for j in range(len(phi)):
 
@@ -224,45 +504,57 @@ def muller_cal(etheta_square,ephi_square,etheta_square90,ephi_square90,freq_inde
                 
                 J= np.array([[1,0],[0,np.exp(1j*del_phi)]])
 
+                M[:,:,i,j] = 0.5 * np.dot(np.array([[1,0,0,1],[1,0,0,-1],[0,1,1,0],[0,-1j,1j,0]]) , np.kron(J,np.conj(J))).dot(np.array([[1,1,0,0],[0,0,1,1j],[0,0,1,-1j],[1,-1,0,0]]))
+          
 
-
-                M30[k,i,j] = np.trace(np.dot(sig_3, J).dot(sig_0).dot(np.conjugate(J.T)))
-                M31[k,i,j] = np.trace(np.dot(sig_3, J).dot(sig_1).dot(np.conjugate(J.T)))
-                M32[k,i,j] = np.trace(np.dot(sig_3, J).dot(sig_2).dot(np.conjugate(J.T)))
-                M33[k,i,j] = np.trace(np.dot(sig_3, J).dot(sig_3).dot(np.conjugate(J.T)))
+               
 
        
 
         ##################################
-        p = ax[k,0].pcolormesh(P,T,np.real(M30[k,:90,:]),cmap='coolwarm')#,vmin = -1e-3, vmax =1e-3)# norm=SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-        ax[k,0].set_title(str(freq[k]),{'fontsize':15},pad=15.0)
-        ax[k,0].set_yticklabels([])
-        plt.colorbar(p,ax=ax[k,0],pad=0.1,shrink=0.8)
+        p = ax[0,0].pcolormesh(P,T,np.abs(M[2,2,:90,:]),cmap='coolwarm', vmin = 0, vmax =1,rasterized=True)# norm=SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+        ax[0,0].set_title('M22',{'fontsize':8},pad=0.0)
+        ax[0,0].set_yticklabels([])
+        ax[0,0].set_xticks([])
+        ax[0,0].set_rgrids([np.pi/4,np.pi/2],[45,90])
+        ax[0,0].tick_params(axis='x',pad=-0.5)
+        ax[0,0].grid(linewidth=1,color='k')
+        plt.colorbar(p,ax=ax[0,0],pad=0.1,shrink=0.8,ticks=[0,0.5,1.0])
 
-        p = ax[k,1].pcolormesh(P,T,np.real(M31[k,:90,:]),cmap='coolwarm')#,vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-        #ax[k,1].set_title('M31',{'fontsize':15},pad=15.0)
-        ax[k,1].set_yticklabels([])
-        plt.colorbar(p,ax=ax[k,1],pad=0.1,shrink=0.8)
+        p = ax[0,1].pcolormesh(P,T,np.abs(M[2,3,:90,:]),cmap='coolwarm',vmin = 0, vmax =1,rasterized=True)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+        ax[0,1].set_title('M23',{'fontsize':8},pad=0.0)
+        ax[0,1].set_yticklabels([])
+        ax[0,1].set_xticks([])
+        ax[0,1].set_rgrids([np.pi/4,np.pi/2],[45,90])
+        ax[0,1].tick_params(axis='x',pad=-0.5)
+        ax[0,1].grid(linewidth=1,color='k')
+        plt.colorbar(p,ax=ax[0,1],pad=0.1,shrink=0.8,ticks=[0,0.5,1.0])
 
-        p = ax[k,2].pcolormesh(P,T,np.real(M32[k,:90,:]),cmap='coolwarm')#,vmin = -1e-3, vmax =1e-3)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-        #ax[k,2].set_title('M32',{'fontsize':15},pad=15.0)
-        ax[k,2].set_yticklabels([])
-        plt.colorbar(p,ax=ax[k,2],pad=0.1,shrink=0.8)
+        p = ax[1,0].pcolormesh(P,T,np.abs(M[3,2,:90,:]),cmap='coolwarm',vmin = 0, vmax =1,rasterized=True)#norm = SymLogNorm(linthresh=lth, vmin = -1e-3, vmax=1e-3))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+        ax[1,0].set_title('M32',{'fontsize':8},pad=0.0)
+        ax[1,0].set_yticklabels([])
+        ax[1,0].set_xticks([])
+        ax[1,0].set_rgrids([np.pi/4,np.pi/2],[45,90])
+        ax[1,0].tick_params(axis='x',pad=-0.5)
+        ax[1,0].grid(linewidth=1,color='k')
+        plt.colorbar(p,ax=ax[1,0],pad=0.1,shrink=0.8,ticks=[0,0.5,1.0])
 
-        p = ax[k,3].pcolormesh(P,T,np.real(M33[k,:90,:]),cmap='coolwarm')#,vmin = 0, vmax =1)#norm = SymLogNorm(linthresh=lth, vmin = 0, vmax =1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
-        #ax[k,3].set_title('M33',{'fontsize':15},pad=15.0)
-        ax[k,3].set_yticklabels([])
-        plt.colorbar(p,ax=ax[k,3],pad=0.1,shrink=0.8)
+        p = ax[1,1].pcolormesh(P,T,np.abs(M[3,3,:90,:]),cmap='coolwarm',vmin = 0, vmax =1,rasterized=True)#norm = SymLogNorm(linthresh=lth, vmin = 0, vmax =1))#,norm = LogNorm()) #X,Y & data2D must all be same dimensions
+        ax[1,1].set_title('M33',{'fontsize':8},pad=0.0)
+        ax[1,1].set_yticklabels([])
+        ax[1,1].set_xticks([])
+        ax[1,1].set_rgrids([np.pi/4,np.pi/2],[45,90])
+        ax[1,1].tick_params(axis='x',pad=-0.5)
+        ax[1,1].grid(linewidth=1,color='k')
+        plt.colorbar(p,ax=ax[1,1],pad=0.1,shrink=0.8,ticks=[0,0.5,1.0])
 
-        plt.savefig('/data4/nmahesh/edges/Lunar/plots/'+title+'.png',dpi=900,bbox_inches = 'tight')
+        plt.savefig('/data4/nmahesh/edges/Lunar/plots/muller_only_offset_'+str(int(freq[k]))+'.pdf',dpi=200,bbox_inches = 'tight')
     
         
         
 
-    #return np.real(M00)/n_M00,np.real(M01)/n_M00,np.real(M02)/n_M00,np.real(M03)/n_M00,np.real(M10)/n_M00,np.real(M11)/n_M00,np.real(M12)/n_M00,np.real(M13)/n_M00,np.real(M20)/n_M00,np.real(M21)/n_M00,np.real(M22)/n_M00,np.real(M23)/n_M00,np.real(M30)/n_M00,np.real(M31)/n_M00,np.real(M32)/n_M00,np.real(M33)/n_M00
-    
-
-    dipolehalf = 0.050          #meters
+   
+dipolehalf = 0.050          #meters
 pattern = 'log'
 rovers = 4
 

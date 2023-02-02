@@ -1,6 +1,6 @@
 from setuptools import setup
 setup(name='image_code',
-version='0.1',
+version='0.2',
 description='image calculation functions',
 url='#',
 author='NMahesh',

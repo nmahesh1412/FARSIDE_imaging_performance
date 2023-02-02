@@ -88,11 +88,13 @@ def baseline_cal(dec,H_o,wav,far_array):
     w = np.zeros((len(basefa)))
     
     for i in range(len(basefa)): 
-                yfa = (far_array[basefa[i][1],0] - far_array[basefa[i][0],0])*10**3/wav
-                zfa = (far_array[basefa[i][1],1] - far_array[basefa[i][0],1])*10**3/wav
+                yfa = (far_array[basefa[i][1],0] - far_array[basefa[i][0],0])*10**3
+                zfa = (far_array[basefa[i][1],1] - far_array[basefa[i][0],1])*10**3
                 
                 u[i],v[i],w[i] = uvcal(dec,H_o,wav,yfa,zfa)
     return u,v,w
+
+           
 
 
 def beam_interpolate(beam,theta,phi,t,p):
@@ -257,6 +259,9 @@ class processed_source:
     def make_sky_coherence(self):
         self.sky_coherence = np.array([[self.sky_map, np.zeros_like(self.sky_map)],[np.zeros_like(self.sky_map), self.sky_map]])
 
+    def make_sky_stokes(self):
+        self.sky_stokes = np.array([self.sky_map, np.zeros_like(self.sky_map),np.zeros_like(self.sky_map), np.zeros_like(self.sky_map)]).T
+
     def make_offset_jacob(self,J):
         self.J_b = np.array([[np.ones_like(self.del_phi),np.zeros_like(self.del_phi)] , [np.zeros_like(self.del_phi),np.exp(1j*self.del_phi)]])
         self.J_off = np.zeros_like(self.J_b,dtype=np.complex128)
@@ -265,29 +270,41 @@ class processed_source:
             for b in range(2):
 
                 self.J_off[a,b] = np.sum(self.J_b[a,:]* J[:,b],axis = 0)
-                
+
+    def make_pseudo_vis_muller(self, M, w_effect=False):
+
+        M_new = M.reshape(4,4,np.shape(self.sky_stokes)[0],np.shape(self.sky_stokes)[1])  
+        vis = np.zeros((4,np.shape(self.sky_stokes)[0],np.shape(self.sky_stokes)[1]),dtype=np.complex128)  
+        for i in range(np.shape(self.sky_stokes)[0]):
+            for j in range(np.shape(self.sky_stokes)[1]):     
+                vis[:,i,j] = np.dot(M_new[:,:,i,j],self.sky_stokes[i,j,:]) 
+        return vis 
+        
+
     def make_pseudo_vis(self,J,w_effect=False):
         vis_temp = np.zeros_like(self.J_off,dtype=np.complex128)
         vis_temp_off = np.zeros_like(self.J_off,dtype=np.complex128)
+        self.vis = np.zeros_like(self.J_off,dtype=np.complex128)
+        self.vis_off = np.zeros_like(self.J_off,dtype=np.complex128)
         
         self.beam_ft = np.zeros((2,2,np.shape(self.del_phi)[0],np.shape(self.del_phi)[1]),dtype=np.complex128)
         self.beam_ft_off = np.zeros((2,2,np.shape(self.del_phi)[0],np.shape(self.del_phi)[1]),dtype=np.complex128)
-        
-        self.vis = np.zeros_like(self.J_off,dtype=np.complex128)
-        self.vis_off = np.zeros_like(self.J_off,dtype=np.complex128)
-        roll_factor = int(np.shape(self.del_phi)[0]/2)
-        
+        roll_factor = int(np.shape(self.del_phi)[0]/2) 
         for a in range(2):
             for b in range(2):
 
                 vis_temp[a,b]= np.sum(J[a,:] * self.sky_coherence[:,b],axis=0)
                 vis_temp_off[a,b]= np.sum(self.J_off[a,:] * self.sky_coherence[:,b],axis=0)
-       
         for a in range(2):
             for b in range(2):
 
                 self.vis[a,b]= np.sum(vis_temp[a,:] * np.conj(J[b,:]),axis=0)
                 self.vis_off[a,b]= np.sum(vis_temp_off[a,:] * np.conj(self.J_off[b,:]),axis=0)
+
+      
+        for a in range(2):
+            for b in range(2):
+                            
                 if w_effect==True:
                     self.roll_index = np.where(np.abs(self.vis[a,b])==np.max(np.abs(self.vis[a,b])))
                     self.vis[a,b] = np.roll(self.vis[a,b],shift=[roll_factor-self.roll_index[0][0],roll_factor-self.roll_index[1][0]],axis=[0,1]) 
@@ -295,9 +312,21 @@ class processed_source:
                 
                 self.beam_ft_off[a,b,:,:] = (fft.fftshift(fft.fft2(fft.fftshift(self.vis_off[a,b]))))
                 self.beam_ft[a,b,:,:] = (fft.fftshift(fft.fft2(fft.fftshift(self.vis[a,b]))))
-               
+  
                 
+    def fourier_vis_muller(self, vis, w_effect=False):  
+        beam_ft = np.zeros((4,np.shape(self.del_phi)[0],np.shape(self.del_phi)[1]),dtype=np.complex128)
+       
+        roll_factor = int(np.shape(self.del_phi)[0]/2) 
+        for a in range(4):
+                                      
+            if w_effect==True:
+                self.roll_index = np.where(np.abs(self.vis[a])==np.max(np.abs(self.vis[a])))
+                self.vis[a] = np.roll(self.vis[a],shift=[roll_factor-self.roll_index[0][0],roll_factor-self.roll_index[1][0]],axis=[0,1]) 
                 
+            beam_ft[a,:,:] = (fft.fftshift(fft.fft2(fft.fftshift(vis[a].T))))
+        return beam_ft            
+    
     def uvcal(self,wav,far_array,w_effect=False):
             if w_effect==True:
                 H_o = self.H_o
@@ -324,9 +353,9 @@ class processed_source:
                         self.w[i] =  np.cos(d)*np.cos(H_o)*x+ np.sin(d)*zfa - np.cos(d)*np.sin(H_o)*yfa
         
         
-    def make_dirty_image(self,w_effect=False,off_c=0):
-            factor = int(np.shape(self.del_phi)[0]/2)
-            H, xedges, yedges = np.histogram2d((self.u.flatten()),(self.v.flatten()),bins=(factor*2,factor*2),normed = True, range=[[-factor,factor],[-factor,factor]])
+    def make_dirty_image(self,beam_ft,beam_ft_off, w_effect=False,off_c=0):
+            factor = int(np.shape(self.del_phi)[0])
+            H, xedges, yedges = np.histogram2d((self.u.flatten()),(self.v.flatten()),bins=(factor,factor),normed = True)#, range=[[-factor/2,factor/2],[-factor/2,factor/2]])
             self.image = np.zeros_like(self.beam_ft,dtype = np.complex128) 
             self.image_off = np.zeros_like(self.beam_ft,dtype = np.complex128)
             vis = np.zeros_like(self.beam_ft, dtype = np.complex128)
@@ -334,8 +363,8 @@ class processed_source:
            
             for j in range(2):
                 for i in range(2):
-                    vis[i,j] =    H*self.beam_ft[i,j]
-                    vis_off[i,j] = H*self.beam_ft_off[i,j]
+                    vis[i,j] =    H*beam_ft[i,j]
+                    vis_off[i,j] = H*beam_ft_off[i,j]
                 
             if off_c ==1:
                 vis_offc = offset_correction(self.J_in_ft, vis_off)
